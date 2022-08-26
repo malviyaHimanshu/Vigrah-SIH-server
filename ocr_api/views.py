@@ -24,8 +24,9 @@ import matplotlib.pyplot as plt
 import tensorflow as tf
 import keras
 from keras.layers import Conv2D, Activation, MaxPooling2D, Dense, Dropout, Flatten
+from keras.models import model_from_json
 import os
-
+from aksharamukha import transliterate
 
 # from models.get_preds import get_predictions
 
@@ -60,34 +61,22 @@ def get_image(request):
     return Response(img_obj)
 
 
-
-
-
-def findPeakRegions(hpp, divider=0.4):
-    threshold = (np.max(hpp)-np.min(hpp))/divider
-    peaks = []
-    peaks_index = []
-    for i, hppv in enumerate(hpp):
-        if hppv > threshold:
-            peaks.append([i, hppv])
-    return peaks
-
-
 def prepare(file):
-    IMG_SIZE_X = 100
-    IMG_SIZE_Y = 140
-    img_array = cv.imread(file, cv.IMREAD_GRAYSCALE)
-    new_array = cv.resize(img_array, (IMG_SIZE_X, IMG_SIZE_Y))
-    return new_array.reshape(-1, 100, 140, 1)
+    IMG_SIZE = 224
+    image = cv.imread(file)
+    image_resized = cv.resize(image, (224, 224))
+    image = np.expand_dims(image_resized, axis=0)
+    return image
 
 
-def findPeakRegions(vpp, divider=0.88):
+def findPeakRegions(vpp,divider):
+    peaks = []
     threshold = (np.max(vpp)-np.min(vpp))/divider
-    print(threshold)
+    # print(threshold)
     peaks = []
     peaks_index = []
     for i, vppv in enumerate(vpp):
-        print(vppv)
+        # print(vppv)
         if vppv > threshold:
             peaks.append([i, vppv])
     return peaks
@@ -96,24 +85,51 @@ def findPeakRegions(vpp, divider=0.88):
 def get_preds(input_image):
     img_path = input_image
 
-    img = cv.imread(img_path, cv.IMREAD_GRAYSCALE)
+    img = cv.imread(img_path)
+
+    for filename in os.listdir('./models/Segmentation/characters'):
+        os.remove(f'./models/Segmentation/characters/{filename}')
+    for filename in os.listdir('./models/Segmentation/lines'):
+        os.remove(f'./models/Segmentation/lines/{filename}')
+
+    # for i in range(len(lIndexB)):
+    #     os.remove(f"{line_dir}line{i+1}.jpg")
+    # for i in range(num_chars):
+    #     os.remove(f"{char_dir}char{i+1}.png")
+
+    # binarisation
+    blur = cv.medianBlur(img, 7)
+    grayImg = cv.cvtColor(blur, cv.COLOR_BGR2GRAY)
+    ret3, th3 = cv.threshold(grayImg, 0, 255, cv.THRESH_BINARY + cv.THRESH_OTSU)
+    img = cv.bitwise_not(th3)
+    cv.imwrite("./models/result.jpeg", img)
+
+    print("this is img " , img)
 
     hProj = np.sum(img,1)
 
-    peaks = findPeakRegions(hProj, 0.44)
-    print(peaks)
-    peaksIndex = np.array(peaks)[:,0].astype(int)
+    divider = 0.01
+    while 1:
+        try:
+            peaks = findPeakRegions(hProj,divider)
+            peaksIndex = np.array(peaks)[:, 0].astype(int)
+            break
+        except:
+            divider+=0.01
+
+        # print(divider)
+    
 
     segmentedImg = np.copy(img)
     r,c = segmentedImg.shape
 
     for ri in range(r):
         if ri in peaksIndex:
-            segmentedImg[ri, :] = 0
+            segmentedImg[ri, :] = 0     
 
     hProjLines = np.sum(segmentedImg,1)
+    hProjLines = np.append(hProjLines,[0,0,0])
 
-    hProjLines = np.append(hProjLines, [0, 0, 0])
     lines = []
     lIndexB = []
     lIndexE = []
@@ -123,9 +139,8 @@ def get_preds(input_image):
             lIndexB.append(ri)
         if hProjLines[ri]!=0 and hProjLines[ri+1]==0 and hProjLines[ri+2]==0:
             lIndexE.append(ri)
-        
+            
     for i in range(len(lIndexB)):
-        print("pass")
         lines.append(img[lIndexB[i]:lIndexE[i],:])
         cv.imwrite("./models/Segmentation/lines/line{}.jpg".format(i+1),lines[i])
 
@@ -368,8 +383,8 @@ def get_preds(input_image):
     'sa':'𑀲​','sā':'𑀲𑀸','si':'𑀲𑀺','sī':'𑀲𑀻','su':'𑀲𑀼','sū':'𑀲𑀽','se':'𑀲𑁂','sai':'𑀲𑁃','so':'𑀲𑁄','sau':'𑀲𑁅','saṃ':'𑀲𑀁',
     'ha':'𑀳​','hā':'𑀳𑀸','hi':'𑀳𑀺','hī':'𑀳𑀻','hu':'𑀳𑀼','hū':'𑀳𑀽','he':'𑀳𑁂','hai':'𑀳𑁃','ho':'𑀳𑁄','hau':'𑀳𑁅','haṃ':'𑀳𑀁'}
 
+    # char_model = keras.models.load_model('./models/mobilenet_model_weights.h5')
 
-    char_model = keras.models.load_model('./models/best_val_loss_model.h5')
 
     line_dir = './models/Segmentation/lines/'
 
@@ -384,9 +399,14 @@ def get_preds(input_image):
 
         vProj = np.sum(img,0)
 
-        peaks = findPeakRegions(vProj,1.01)
-
-        peaksIndex = np.array(peaks)[:,0].astype(int)
+        divider = 0.01
+        while 1:
+            try:
+                peaks = findPeakRegions(vProj,divider)
+                peaksIndex = np.array(peaks)[:,0].astype(int)
+                break
+            except:
+                divider += 0.01
 
         segmentedImg = np.copy(img)
         r,c = segmentedImg.shape
@@ -410,10 +430,13 @@ def get_preds(input_image):
         for i in range(len(charsB)):
             chars.append(img[:,charsB[i]:charsE[i]]) 
             if len(chars[i][0]) != 0 : 
-                cv.imwrite(f"./models/Segmentation/characters/char{kth_img}.png",chars[i])
+                
+                if(charsE[i] - charsB[i] >= 25): 
+                    cv.imwrite(f"./models/Segmentation/characters/char{kth_img}.png",chars[i])  # Characters of width greater than 25 is only kept
+                    kth_img += 1
     #             print(f"Segmentation/characters/char{kth_img}.png")
-                kth_img += 1
-        line_breaks.append(kth_img)
+        line_breaks.append(kth_img-1)
+        # print(line_breaks)
 
 
     char_dir = './models/Segmentation/characters/'
@@ -422,13 +445,16 @@ def get_preds(input_image):
 
     final_pred = ""
 
+    model = model_from_json(open('./models/model_arch.json').read())
+    model.load_weights('./models/mobilenet_model_weights.h5')
+
     for i in range(num_chars):
         if i in line_breaks:
             final_pred += '\n '
         img_path = f"{char_dir}char{i+1}.png"
-        print(img_path)
+        # print(img_path)
         img = prepare(img_path)
-        pred = char_model.predict([img])
+        pred = model.predict([img])
 
         pred = list(pred[0])
         char_type = class_names[pred.index(max(pred))]
@@ -436,7 +462,14 @@ def get_preds(input_image):
         final_pred += " "
 
     print("This is the finalll predd\n", final_pred)
-    return final_pred
+    trans_text = transliterate.process('autodetect', 'Devanagari', final_pred)
+
+    # for i in range(len(lIndexB)):
+    #     os.remove(f"{line_dir}line{i+1}.jpg")
+    # for i in range(num_chars):
+    #     os.remove(f"{char_dir}char{i+1}.png")
+        
+    return trans_text
 
 
 
